@@ -16,6 +16,7 @@ static const char *const TAG = "usb_knob";
 // VIA raw HID protocol (VIAL firmware speaks it too).
 static constexpr uint8_t VIA_GET_PROTOCOL_VERSION = 0x01;
 static constexpr uint8_t VIA_CUSTOM_SET_VALUE = 0x07;
+static constexpr uint8_t VIA_CUSTOM_GET_VALUE = 0x08;
 // VIA >= 11 addresses lighting through a channel byte.
 static constexpr uint8_t VIA_CHANNEL_RGBLIGHT = 0x02;
 static constexpr uint8_t VIA_RGBLIGHT_BRIGHTNESS = 0x01;
@@ -152,6 +153,15 @@ void UsbKnob::handle_raw_report_(const uint8_t *data, size_t len) {
   if (len < 1)
     return;
   ESP_LOGV(TAG, "VIA reply: cmd 0x%02X, %u bytes", data[0], len);
+  // Reply to query_effect(): [ 08, channel, value_id, value ].
+  if (data[0] == VIA_CUSTOM_GET_VALUE && len >= 4 && data[1] == VIA_CHANNEL_RGBLIGHT &&
+      data[2] == VIA_RGBLIGHT_EFFECT) {
+    if (data[3] != this->last_reported_effect_) {
+      this->last_reported_effect_ = data[3];
+      ESP_LOGI(TAG, "knob reports rgblight effect %u (0 = underglow disabled)", data[3]);
+    }
+    return;
+  }
   if (data[0] == VIA_GET_PROTOCOL_VERSION && len >= 3) {
     // Big-endian, unlike everything else in this protocol.
     uint16_t version = (data[1] << 8) | data[2];
@@ -194,6 +204,18 @@ void UsbKnob::set_effect(uint8_t effect) {
   ESP_LOGV(TAG, "set_effect(%u)", effect);
   this->send_rgblight_effect_(effect);
   this->last_effect_ = effect;
+}
+
+void UsbKnob::query_effect() {
+  if (!this->raw_claimed_)
+    return;
+  if (this->via_protocol_.load() >= VIA_PROTOCOL_CUSTOM_CHANNELS) {
+    const uint8_t packet[] = {VIA_CUSTOM_GET_VALUE, VIA_CHANNEL_RGBLIGHT, VIA_RGBLIGHT_EFFECT};
+    this->send_via_(packet, sizeof(packet));
+  } else {
+    const uint8_t packet[] = {VIA_CUSTOM_GET_VALUE, VIA_V2_RGBLIGHT_EFFECT};
+    this->send_via_(packet, sizeof(packet));
+  }
 }
 
 void UsbKnob::send_rgblight_effect_(uint8_t effect) {
@@ -261,6 +283,7 @@ void UsbKnob::on_disconnected() {
   this->via_protocol_.store(0);
   this->last_effect_ = -1;
   this->last_hsv_ = -1;
+  this->last_reported_effect_ = -1;
   this->raw_input_started_.store(false);
   this->input_started_.store(false);
   this->packet_size_ = 0;

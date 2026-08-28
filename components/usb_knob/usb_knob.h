@@ -43,6 +43,10 @@ class UsbKnob : public usb_host::USBClient {
   /// Set the rgblight animation. 0 turns the underglow off, 1 is static light,
   /// 2-5 are breathing from slowest to fastest. Not written to the knob's EEPROM.
   void set_effect(uint8_t effect);
+
+  /// Ask the knob what rgblight effect it is currently running. The answer is
+  /// logged when it changes; 0 means the underglow is disabled.
+  void query_effect();
   void register_key(uint16_t usage, binary_sensor::BinarySensor *sensor) {
     this->keys_.push_back(KeySensor{usage, sensor});
   }
@@ -95,6 +99,7 @@ class UsbKnob : public usb_host::USBClient {
   // Reset on disconnect and when the protocol version changes the packet layout.
   int16_t last_effect_{-1};
   int32_t last_hsv_{-1};
+  int16_t last_reported_effect_{-1};
   bool lighting_{true};
   bool claimed_{false};
   bool raw_claimed_{false};
