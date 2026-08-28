@@ -29,6 +29,9 @@ static constexpr uint8_t VIA_V2_RGBLIGHT_COLOR = 0x83;
 // rgblight mode 1 = static light; 0 would disable the underglow entirely.
 static constexpr uint8_t RGBLIGHT_MODE_STATIC = 1;
 static constexpr uint16_t VIA_PROTOCOL_CUSTOM_CHANNELS = 11;
+// VIA raw HID reports are 32 bytes; 64 is headroom. Bounded deliberately: this
+// buffer lives on the USB task stack, which usb_host sizes at 4kB.
+static constexpr size_t VIA_REPORT_MAX = 64;
 
 void UsbKnob::on_connected() {
   const usb_config_desc_t *config_desc;
@@ -105,6 +108,11 @@ void UsbKnob::setup_lighting_() {
     return;
   }
   this->raw_packet_size_ = std::min(in_size, out_size);
+  if (this->raw_packet_size_ > VIA_REPORT_MAX) {
+    ESP_LOGW(TAG, "Raw HID report size %u exceeds %zu; lighting disabled", this->raw_packet_size_, VIA_REPORT_MAX);
+    this->raw_packet_size_ = 0;
+    return;
+  }
 
   auto err = usb_host_interface_claim(this->handle_, this->device_handle_, this->raw_interface_, 0);
   if (err != ESP_OK) {
@@ -163,8 +171,8 @@ void UsbKnob::handle_raw_report_(const uint8_t *data, size_t len) {
     } else if (len >= 3 && data[1] == VIA_V2_RGBLIGHT_EFFECT) {
       effect = data[2];
     }
-    if (effect >= 0 && effect != this->last_reported_effect_) {
-      this->last_reported_effect_ = effect;
+    if (effect >= 0 && effect != this->last_reported_effect_.load()) {
+      this->last_reported_effect_.store(effect);
       ESP_LOGI(TAG, "knob reports rgblight effect %d (0 = underglow disabled)", effect);
     }
     return;
@@ -174,14 +182,11 @@ void UsbKnob::handle_raw_report_(const uint8_t *data, size_t len) {
     uint16_t version = (data[1] << 8) | data[2];
     this->via_protocol_.store(version);
     ESP_LOGI(TAG, "VIA protocol version %u", version);
-    // The version decides the packet layout, so anything cached was sent in the
-    // other format and has to be resent.
-    this->last_effect_ = -1;
-    this->last_hue_ = -1;
-    this->last_sat_ = -1;
-    this->last_val_ = -1;
-    // Solid colour, otherwise an animation would immediately overwrite our hue.
-    this->set_effect(RGBLIGHT_MODE_STATIC);
+    // The cache belongs to the main loop, and the version just changed the packet
+    // layout it was written in. Let loop() drop it and re-establish the effect.
+    this->lighting_init_pending_.store(true);
+    this->enable_loop_soon_any_context();
+    App.wake_loop_threadsafe();
   }
 }
 
@@ -192,10 +197,35 @@ bool UsbKnob::send_via_(const uint8_t *data, size_t len) {
   if (len > this->raw_packet_size_)
     return false;
   // Raw HID reports are fixed-size and unprefixed; pad the rest with zeroes.
-  uint8_t packet[usb_host::USB_MAX_PACKET_SIZE] = {};
+  uint8_t packet[VIA_REPORT_MAX] = {};
   memcpy(packet, data, len);
-  return this->transfer_out(
-      this->raw_endpoint_out_, [](const usb_host::TransferStatus &status) {}, packet, this->raw_packet_size_);
+
+  // CALLBACK CONTEXT: USB task. A command that never landed leaves the knob
+  // showing something the cache does not describe, so ask the main loop to
+  // forget the cache rather than silently diverging.
+  auto callback = [this](const usb_host::TransferStatus &status) {
+    if (!status.success) {
+      ESP_LOGW(TAG, "Lighting command failed, status=0x%X", status.error_code);
+      this->lighting_resync_.store(true);
+      this->enable_loop_soon_any_context();
+    }
+  };
+
+  if (!this->transfer_out(this->raw_endpoint_out_, callback, packet, this->raw_packet_size_)) {
+    ESP_LOGW(TAG, "Lighting command could not be submitted");
+    this->lighting_resync_.store(true);
+    this->enable_loop_soon_any_context();
+    return false;
+  }
+  return true;
+}
+
+// THREAD CONTEXT: main loop only.
+void UsbKnob::invalidate_lighting_cache_() {
+  this->last_effect_ = -1;
+  this->last_hue_ = -1;
+  this->last_sat_ = -1;
+  this->last_val_ = -1;
 }
 
 void UsbKnob::set_effect(uint8_t effect) {
@@ -213,6 +243,7 @@ void UsbKnob::set_effect(uint8_t effect) {
     this->last_sat_ = -1;
     this->last_val_ = -1;
   }
+
   ESP_LOGV(TAG, "set_effect(%u)", effect);
   this->send_rgblight_effect_(effect);
   this->last_effect_ = effect;
@@ -304,14 +335,14 @@ void UsbKnob::on_disconnected() {
     this->raw_claimed_ = false;
   }
   this->via_protocol_.store(0);
-  this->last_effect_ = -1;
-  this->last_hue_ = -1;
-  this->last_sat_ = -1;
-  this->last_val_ = -1;
-  this->last_reported_effect_ = -1;
+  this->invalidate_lighting_cache_();
+  this->last_reported_effect_.store(-1);
+  this->lighting_init_pending_.store(false);
+  this->lighting_resync_.store(false);
   this->raw_input_started_.store(false);
   this->input_started_.store(false);
   this->packet_size_ = 0;
+  this->raw_packet_size_ = 0;
   // Resets the transfer request pool.
   USBClient::on_disconnected();
 }
@@ -371,6 +402,18 @@ void UsbKnob::handle_report_(const uint8_t *data, size_t len) {
 void UsbKnob::loop() {
   bool had_work = this->process_usb_events_();
 
+  if (this->lighting_init_pending_.exchange(false)) {
+    had_work = true;
+    this->invalidate_lighting_cache_();
+    // Solid colour, otherwise an animation would immediately overwrite our hue.
+    this->set_effect(RGBLIGHT_MODE_STATIC);
+  }
+  if (this->lighting_resync_.exchange(false)) {
+    had_work = true;
+    ESP_LOGD(TAG, "Dropping the lighting cache after a failed command");
+    this->invalidate_lighting_cache_();
+  }
+
   KnobEvent *event;
   while ((event = this->event_queue_.pop()) != nullptr) {
     had_work = true;
@@ -410,6 +453,12 @@ void UsbKnob::dump_config() {
                 "  Report ID: 0x%02X\n"
                 "  Lighting: %s",
                 this->interface_, this->endpoint_, this->report_id_, YESNO(this->lighting_));
+  if (this->lighting_) {
+    ESP_LOGCONFIG(TAG,
+                  "  Raw HID interface: %u\n"
+                  "  Raw HID endpoints: 0x%02X IN, 0x%02X OUT",
+                  this->raw_interface_, this->raw_endpoint_in_, this->raw_endpoint_out_);
+  }
   for (const auto &key : this->keys_) {
     ESP_LOGCONFIG(TAG, "  Key 0x%04X:", key.usage);
     LOG_BINARY_SENSOR("    ", "Binary Sensor", key.sensor);

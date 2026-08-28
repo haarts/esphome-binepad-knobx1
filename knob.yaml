@@ -1,11 +1,13 @@
-# Binepad KnobX1 -> M5Stack AtomS3-Lite (USB host) -> Home Assistant / Music Assistant
+# Reusable KnobX1 knob package.
+#
+# Binepad KnobX1 -> M5Stack AtomS3-Lite (USB host) -> Home Assistant / Music
+# Assistant. Include this from a per-room file and pass at least `name`,
+# `friendly_name` and `player_entity`; see knob-livingroom.yaml.
 #
 # Power the Atom from the 5V/GND breakout header; the USB-C port is used in host
 # mode for the knob and must not be used for power at the same time.
 
 substitutions:
-  name: knob-livingroom
-  friendly_name: Knob Living Room
   # How close together two pushes must be to count as a double push. Also the
   # delay before a single push plays/pauses.
   double_push_window: 0.35s
@@ -44,8 +46,7 @@ external_components:
     components: [usb_knob]
 
 logger:
-  level:
-    DEBUG
+  level: DEBUG
 api:
 ota:
   - platform: esphome
@@ -75,7 +76,7 @@ binary_sensor:
       - homeassistant.action:
           action: media_player.volume_up
           data:
-            entity_id: media_player.louder_esp32_plus
+            entity_id: ${player_entity}
   - platform: usb_knob
     usb_knob_id: knob1
     key: volume_down
@@ -84,7 +85,7 @@ binary_sensor:
       - homeassistant.action:
           action: media_player.volume_down
           data:
-            entity_id: media_player.louder_esp32_plus
+            entity_id: ${player_entity}
   - platform: usb_knob
     usb_knob_id: knob1
     key: mute
@@ -105,7 +106,7 @@ binary_sensor:
           - homeassistant.action:
               action: media_player.media_next_track
               data:
-                entity_id: media_player.louder_esp32_plus
+                entity_id: ${player_entity}
       # Fires while the button is still down, so the hold gets instant feedback.
       - timing:
           - ON for at least ${long_push_time}
@@ -113,7 +114,7 @@ binary_sensor:
           - homeassistant.action:
               action: media_player.volume_mute
               data:
-                entity_id: media_player.louder_esp32_plus
+                entity_id: ${player_entity}
               data_template:
                 is_volume_muted: "{{ mute }}"
               variables:
@@ -126,12 +127,12 @@ binary_sensor:
           - homeassistant.action:
               action: media_player.media_play_pause
               data:
-                entity_id: media_player.louder_esp32_plus
+                entity_id: ${player_entity}
 
   # Mirrors the player's mute attribute back from HA so the knob can toggle it.
   - platform: homeassistant
     id: player_muted
-    entity_id: media_player.louder_esp32_plus
+    entity_id: ${player_entity}
     attribute: is_volume_muted
     internal: true
     on_state:
@@ -142,7 +143,7 @@ binary_sensor:
 sensor:
   - platform: homeassistant
     id: player_volume
-    entity_id: media_player.louder_esp32_plus
+    entity_id: ${player_entity}
     attribute: volume_level
     internal: true
     on_value:
@@ -152,7 +153,7 @@ sensor:
 text_sensor:
   - platform: homeassistant
     id: player_state
-    entity_id: media_player.louder_esp32_plus
+    entity_id: ${player_entity}
     internal: true
     on_value:
       - script.execute: update_underglow
@@ -169,6 +170,20 @@ globals:
     initial_value: '0'
 
 script:
+  # The one place volume is turned into a hue. Both the static gradient and the
+  # breathing step go through here, so they cannot drift apart.
+  - id: paint_volume_color
+    parameters:
+      value: int
+    then:
+      - lambda: |-
+          float raw = id(player_volume).state;
+          float v = clamp(isnan(raw) ? 0.0f : raw, 0.0f, 1.0f);
+          // QMK hue: 0 = red, 85 = green, 170 = blue.
+          uint8_t hue = (uint8_t) lroundf(170.0f * (1.0f - v));
+          id(current_val) = value;
+          id(knob1).set_hsv(hue, 255, (uint8_t) value);
+
   - id: update_underglow
     mode: restart
     then:
@@ -196,22 +211,19 @@ script:
           // the knob's own animation, which always restarts from fully dark.
           id(knob1).set_effect(1);
 
-          float raw = id(player_volume).state;
-          float v = clamp(isnan(raw) ? 0.0f : raw, 0.0f, 1.0f);
-          // QMK hue: 0 = red, 85 = green, 170 = blue.
-          uint8_t hue = (uint8_t) lroundf(170.0f * (1.0f - v));
-
           if (mode == 0) {
-            // Saturation 0 is white, so the hue does not matter.
+            // Saturation 0 is white, so the hue does not matter; this is the one
+            // state that is not a volume colour, so it does not use the script.
             id(current_val) = ${idle_brightness};
             id(knob1).set_hsv(0, 0, ${idle_brightness});
           } else if (mode == 1) {
+            float raw = id(player_volume).state;
+            float v = clamp(isnan(raw) ? 0.0f : raw, 0.0f, 1.0f);
             // |cos(2*pi*v)| is 1 at v = 0, 0.5 and 1, and 0 at the quarter points.
             // The sqrt flattens the dip so the blends stay bright for longer.
             float peak = sqrtf(fabsf(cosf(6.28318531f * v)));
             const float floor_v = ${led_min_brightness};
-            id(current_val) = (int) lroundf(floor_v + (255.0f - floor_v) * peak);
-            id(knob1).set_hsv(hue, 255, (uint8_t) id(current_val));
+            id(paint_volume_color)->execute((int) lroundf(floor_v + (255.0f - floor_v) * peak));
           } else if (last_mode != 2) {
             // Entering mute: start the breath at the brightness already showing,
             // on the rising half of the curve, so there is no visible jump.
@@ -235,11 +247,7 @@ interval:
           // 0.5 - 0.5*cos rises from 0 to 1 over half a cycle and back.
           float b = 0.5f - 0.5f * cosf(id(breathe_phase));
           float span = ${breathe_max} - ${breathe_min};
-          id(current_val) = (int) lroundf(${breathe_min} + span * b);
-          float raw = id(player_volume).state;
-          float v = clamp(isnan(raw) ? 0.0f : raw, 0.0f, 1.0f);
-          uint8_t hue = (uint8_t) lroundf(170.0f * (1.0f - v));
-          id(knob1).set_hsv(hue, 255, (uint8_t) id(current_val));
+          id(paint_volume_color)->execute((int) lroundf(${breathe_min} + span * b));
 
   # Repaint periodically so the knob picks the right state back up after being
   # unplugged and reattached. Redundant updates are dropped in the component, so

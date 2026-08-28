@@ -60,17 +60,20 @@ class UsbKnob : public usb_host::USBClient {
   void on_connected() override;
   void on_disconnected() override;
 
-  // Claims the VIAL raw HID interface and starts the response listener. Failure is
-  // non-fatal: the knob still reports volume events without working lighting.
   // Looks up an endpoint on an interface, returning its capped max packet size in
   // packet_size, or false if either the interface or the endpoint is missing.
   bool find_endpoint_(const usb_config_desc_t *config_desc, uint8_t interface, uint8_t endpoint,
                       uint16_t *packet_size);
+  // Claims the VIAL raw HID interface and starts the response listener. Failure is
+  // non-fatal: the knob still reports volume events without working lighting.
   void setup_lighting_();
   void start_raw_input_();
   void handle_raw_report_(const uint8_t *data, size_t len);
   bool send_via_(const uint8_t *data, size_t len);
   void send_rgblight_effect_(uint8_t effect);
+  // Forgets what the knob was last told, so the next repaint resends everything.
+  // Main loop only, like every other write to the cache.
+  void invalidate_lighting_cache_();
 
   // Submits an interrupt IN transfer on the configured endpoint. Called from both threads.
   void start_input_();
@@ -98,12 +101,20 @@ class UsbKnob : public usb_host::USBClient {
   // Last values sent, so repeated identical updates cost no USB traffic. Hue,
   // saturation and brightness are tracked separately because they are separate
   // commands: animating brightness then costs one packet, not two.
-  // Reset on disconnect and when the protocol version changes the packet layout.
+  // WRITTEN FROM THE MAIN LOOP ONLY. The USB task asks for changes by setting
+  // one of the atomic flags below; loop() acts on them.
   int16_t last_effect_{-1};
   int16_t last_hue_{-1};
   int16_t last_sat_{-1};
   int16_t last_val_{-1};
-  int16_t last_reported_effect_{-1};
+  // Set by the USB task on the protocol-version reply: the version decides the
+  // packet layout, so the cache has to be dropped and the effect re-established.
+  std::atomic<bool> lighting_init_pending_{false};
+  // Set by the USB task when a lighting command fails: what the knob is showing
+  // no longer matches the cache, so drop it and let the next repaint resend.
+  std::atomic<bool> lighting_resync_{false};
+  // Diagnostic only, written by the USB task.
+  std::atomic<int16_t> last_reported_effect_{-1};
   bool lighting_{true};
   bool claimed_{false};
   bool raw_claimed_{false};

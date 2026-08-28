@@ -77,11 +77,30 @@ unplugged and reattached costs no USB traffic while nothing changes.
 
 ```
 components/usb_knob/
-  __init__.py        # usb_knob: platform config (vid/pid/interface/endpoint/report_id)
-  binary_sensor.py   # binary_sensor platform, key: name or raw usage code
-  usb_knob.h/.cpp    # USBClient subclass
-knobx1.yaml          # example device config
+  __init__.py          # usb_knob: platform config (vid/pid/interface/endpoint/report_id)
+  binary_sensor.py     # binary_sensor platform, key: name or raw usage code
+  usb_knob.h/.cpp      # USBClient subclass
+knob.yaml              # reusable package: all behaviour, one knob's worth
+knob-livingroom.yaml   # one room: name, friendly name, player entity
 ```
+
+## Adding a room
+
+Copy `knob-livingroom.yaml` and change the three vars:
+
+```yaml
+packages:
+  knob: !include
+    file: knob.yaml
+    vars:
+      name: knob-kitchen
+      friendly_name: Knob Kitchen
+      player_entity: media_player.kitchen_speaker
+```
+
+Then `esphome run knob-kitchen.yaml`. Any tunable from `knob.yaml`'s
+`substitutions:` block can be overridden in the same `vars:` map, so one room
+can breathe faster or sit dimmer than another without forking the package.
 
 ## Config
 

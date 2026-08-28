@@ -1,0 +1,13 @@
+# One knob. Everything device-specific lives here; the behaviour is in knob.yaml.
+#
+# To add a room, copy this file and change the three vars below. Any tunable
+# from knob.yaml's substitutions block (breathe_period, led_min_brightness, ...)
+# can also be overridden here.
+
+packages:
+  knob: !include
+    file: knob.yaml
+    vars:
+      name: knob-livingroom
+      friendly_name: Knob Living Room
+      player_entity: media_player.louder_esp32_plus
