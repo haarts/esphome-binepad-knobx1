@@ -39,6 +39,10 @@ class UsbKnob : public usb_host::USBClient {
   /// Set the underglow colour. Hue/saturation/value are QMK's 0-255 scale
   /// (hue 0 = red, 85 = green, 170 = blue). Not written to the knob's EEPROM.
   void set_hsv(uint8_t hue, uint8_t saturation, uint8_t value);
+
+  /// Set the rgblight animation. 0 turns the underglow off, 1 is static light,
+  /// 2-5 are breathing from slowest to fastest. Not written to the knob's EEPROM.
+  void set_effect(uint8_t effect);
   void register_key(uint16_t usage, binary_sensor::BinarySensor *sensor) {
     this->keys_.push_back(KeySensor{usage, sensor});
   }
@@ -87,6 +91,10 @@ class UsbKnob : public usb_host::USBClient {
   uint8_t raw_interface_{1};
   uint8_t raw_endpoint_in_{0x82};
   uint8_t raw_endpoint_out_{0x03};
+  // Last values sent, so repeated identical updates cost no USB traffic.
+  // Reset on disconnect and when the protocol version changes the packet layout.
+  int16_t last_effect_{-1};
+  int32_t last_hsv_{-1};
   bool lighting_{true};
   bool claimed_{false};
   bool raw_claimed_{false};

@@ -13,6 +13,8 @@ substitutions:
   # The small gap between the two keeps a borderline push from matching both.
   short_push_max: 0.55s
   long_push_time: 0.6s
+  # rgblight breathing animation: 2 is the slowest, 5 the fastest.
+  breathe_effect: "2"
   # Underglow floor, 0-255. The LEDs never go below this, so the blue/green and
   # green/red transitions dim but stay clearly lit.
   led_min_brightness: "110"
@@ -123,6 +125,8 @@ binary_sensor:
     entity_id: media_player.louder_esp32_plus
     attribute: is_volume_muted
     internal: true
+    on_state:
+      - script.execute: update_underglow
 
 # Underglow follows the player volume: blue (low) -> green (mid) -> red (high).
 # Brightness peaks on the three pure colours and dips through the blends.
@@ -133,14 +137,49 @@ sensor:
     attribute: volume_level
     internal: true
     on_value:
+      - script.execute: update_underglow
+
+# Player state decides whether the underglow is on at all.
+text_sensor:
+  - platform: homeassistant
+    id: player_state
+    entity_id: media_player.louder_esp32_plus
+    internal: true
+    on_value:
+      - script.execute: update_underglow
+
+script:
+  - id: update_underglow
+    mode: restart
+    then:
       - lambda: |-
-          if (isnan(x)) return;
-          float v = clamp(x, 0.0f, 1.0f);
+          // Not playing (paused, idle, off, unavailable): underglow off.
+          if (id(player_state).state != "playing") {
+            id(knob1).set_effect(0);
+            return;
+          }
+          float raw = id(player_volume).state;
+          float v = clamp(isnan(raw) ? 0.0f : raw, 0.0f, 1.0f);
           // QMK hue: 0 = red, 85 = green, 170 = blue.
           uint8_t hue = (uint8_t) lroundf(170.0f * (1.0f - v));
+          // Muted: breathe at full value so the pulse has the whole range to swing through.
+          if (id(player_muted).state) {
+            id(knob1).set_hsv(hue, 255, 255);
+            id(knob1).set_effect(${breathe_effect});
+            return;
+          }
           // |cos(2*pi*v)| is 1 at v = 0, 0.5 and 1, and 0 at the quarter points.
           // The sqrt flattens the dip so the blends stay bright for longer.
           float peak = sqrtf(fabsf(cosf(6.28318531f * v)));
           const float floor_v = ${led_min_brightness};
           uint8_t val = (uint8_t) lroundf(floor_v + (255.0f - floor_v) * peak);
           id(knob1).set_hsv(hue, 255, val);
+          id(knob1).set_effect(1);
+
+# Repaint periodically so the knob picks the right state back up after being
+# unplugged and reattached. Redundant updates are dropped in the component, so
+# this costs no USB traffic while nothing changes.
+interval:
+  - interval: 5s
+    then:
+      - script.execute: update_underglow

@@ -157,8 +157,12 @@ void UsbKnob::handle_raw_report_(const uint8_t *data, size_t len) {
     uint16_t version = (data[1] << 8) | data[2];
     this->via_protocol_.store(version);
     ESP_LOGI(TAG, "VIA protocol version %u", version);
+    // The version decides the packet layout, so anything cached was sent in the
+    // other format and has to be resent.
+    this->last_effect_ = -1;
+    this->last_hsv_ = -1;
     // Solid colour, otherwise an animation would immediately overwrite our hue.
-    this->send_rgblight_effect_(RGBLIGHT_MODE_STATIC);
+    this->set_effect(RGBLIGHT_MODE_STATIC);
   }
 }
 
@@ -173,6 +177,18 @@ bool UsbKnob::send_via_(const uint8_t *data, size_t len) {
   memcpy(packet, data, len);
   return this->transfer_out(
       this->raw_endpoint_out_, [](const usb_host::TransferStatus &status) {}, packet, this->raw_packet_size_);
+}
+
+void UsbKnob::set_effect(uint8_t effect) {
+  if (!this->raw_claimed_) {
+    ESP_LOGD(TAG, "set_effect ignored, lighting not available");
+    return;
+  }
+  if (effect == this->last_effect_)
+    return;
+  ESP_LOGV(TAG, "set_effect(%u)", effect);
+  this->send_rgblight_effect_(effect);
+  this->last_effect_ = effect;
 }
 
 void UsbKnob::send_rgblight_effect_(uint8_t effect) {
@@ -190,7 +206,11 @@ void UsbKnob::set_hsv(uint8_t hue, uint8_t saturation, uint8_t value) {
     ESP_LOGD(TAG, "set_hsv ignored, lighting not available");
     return;
   }
+  int32_t packed = (hue << 16) | (saturation << 8) | value;
+  if (packed == this->last_hsv_)
+    return;
   ESP_LOGV(TAG, "set_hsv(%u, %u, %u)", hue, saturation, value);
+  this->last_hsv_ = packed;
   // Colour first: the brightness command keeps the current hue/sat, and vice versa.
   if (this->via_protocol_.load() >= VIA_PROTOCOL_CUSTOM_CHANNELS) {
     const uint8_t color[] = {VIA_CUSTOM_SET_VALUE, VIA_CHANNEL_RGBLIGHT, VIA_RGBLIGHT_COLOR, hue, saturation};
@@ -228,6 +248,8 @@ void UsbKnob::on_disconnected() {
     this->raw_claimed_ = false;
   }
   this->via_protocol_.store(0);
+  this->last_effect_ = -1;
+  this->last_hsv_ = -1;
   this->raw_input_started_.store(false);
   this->input_started_.store(false);
   this->packet_size_ = 0;
