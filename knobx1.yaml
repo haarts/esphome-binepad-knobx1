@@ -7,7 +7,7 @@ substitutions:
   name: knob-livingroom
   friendly_name: Knob Living Room
   # How close together two pushes must be to count as a double push. Also the
-  # delay before a single push toggles mute.
+  # delay before a single push plays/pauses.
   double_push_window: 0.35s
   # A push shorter than this is a tap; longer than long_push_time it is a hold.
   # The small gap between the two keeps a borderline push from matching both.
