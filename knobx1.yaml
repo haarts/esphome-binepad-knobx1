@@ -153,6 +153,15 @@ script:
     mode: restart
     then:
       - lambda: |-
+          // Log the player state whenever it changes, so what the device actually
+          // sees can be compared against what Home Assistant shows.
+          static std::string last_logged;
+          if (id(player_state).state != last_logged) {
+            last_logged = id(player_state).state;
+            ESP_LOGI("underglow", "player state is '%s' (muted %s, volume %.2f)",
+                     last_logged.c_str(), YESNO(id(player_muted).state),
+                     id(player_volume).state);
+          }
           // Not playing (paused, idle, off, unavailable): underglow off.
           if (id(player_state).state != "playing") {
             id(knob1).set_effect(0);
