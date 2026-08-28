@@ -152,13 +152,20 @@ void UsbKnob::start_raw_input_() {
 void UsbKnob::handle_raw_report_(const uint8_t *data, size_t len) {
   if (len < 1)
     return;
-  ESP_LOGV(TAG, "VIA reply: cmd 0x%02X, %u bytes", data[0], len);
-  // Reply to query_effect(): [ 08, channel, value_id, value ].
-  if (data[0] == VIA_CUSTOM_GET_VALUE && len >= 4 && data[1] == VIA_CHANNEL_RGBLIGHT &&
-      data[2] == VIA_RGBLIGHT_EFFECT) {
-    if (data[3] != this->last_reported_effect_) {
-      this->last_reported_effect_ = data[3];
-      ESP_LOGI(TAG, "knob reports rgblight effect %u (0 = underglow disabled)", data[3]);
+  ESP_LOGD(TAG, "VIA reply: %02X %02X %02X %02X (%u bytes)", data[0], len > 1 ? data[1] : 0,
+           len > 2 ? data[2] : 0, len > 3 ? data[3] : 0, len);
+  // Reply to query_effect(). VIA >= 11 answers [ 08, channel, value_id, value ];
+  // VIAL (protocol 9) answers [ 08, value_id, value ].
+  if (data[0] == VIA_CUSTOM_GET_VALUE) {
+    int16_t effect = -1;
+    if (len >= 4 && data[1] == VIA_CHANNEL_RGBLIGHT && data[2] == VIA_RGBLIGHT_EFFECT) {
+      effect = data[3];
+    } else if (len >= 3 && data[1] == VIA_V2_RGBLIGHT_EFFECT) {
+      effect = data[2];
+    }
+    if (effect >= 0 && effect != this->last_reported_effect_) {
+      this->last_reported_effect_ = effect;
+      ESP_LOGI(TAG, "knob reports rgblight effect %d (0 = underglow disabled)", effect);
     }
     return;
   }
