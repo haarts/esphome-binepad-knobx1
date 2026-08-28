@@ -15,8 +15,12 @@ substitutions:
   long_push_time: 0.6s
   # Dim white shown while the player is not playing, out of 255.
   idle_brightness: "100"
-  # rgblight breathing animation: 2 is the slowest, 5 the fastest.
-  breathe_effect: "2"
+  # Breathing while muted, driven from the ESP so it can start at whatever
+  # brightness the LEDs are already showing. Seconds per full breath, and the
+  # brightness range it swings between.
+  breathe_period: "4.0"
+  breathe_min: "20"
+  breathe_max: "255"
   # Underglow floor, 0-255. The LEDs never go below this, so the blue/green and
   # green/red transitions dim but stay clearly lit.
   led_min_brightness: "110"
@@ -150,6 +154,17 @@ text_sensor:
     on_value:
       - script.execute: update_underglow
 
+globals:
+  - id: breathe_phase
+    type: float
+    restore_value: false
+    initial_value: '0.0f'
+  # Brightness currently on the LEDs, used to seed the breathing phase.
+  - id: current_val
+    type: int
+    restore_value: false
+    initial_value: '0'
+
 script:
   - id: update_underglow
     mode: restart
@@ -164,36 +179,68 @@ script:
                      last_logged.c_str(), YESNO(id(player_muted).state),
                      id(player_volume).state);
           }
-          // Not playing (paused, idle, off, unavailable): dim white.
+
+          // 0 = not playing, 1 = playing, 2 = playing but muted.
+          int mode = 2;
           if (id(player_state).state != "playing") {
-            id(knob1).set_effect(1);
-            // Saturation 0 is white, so the hue does not matter.
-            id(knob1).set_hsv(0, 0, ${idle_brightness});
-            return;
+            mode = 0;
+          } else if (!id(player_muted).state) {
+            mode = 1;
           }
+          static int last_mode = -1;
+
+          // Static light throughout: the breathing is driven from here, not by
+          // the knob's own animation, which always restarts from fully dark.
+          id(knob1).set_effect(1);
+
           float raw = id(player_volume).state;
           float v = clamp(isnan(raw) ? 0.0f : raw, 0.0f, 1.0f);
           // QMK hue: 0 = red, 85 = green, 170 = blue.
           uint8_t hue = (uint8_t) lroundf(170.0f * (1.0f - v));
-          // Effect before colour: set_hsv() is a no-op while the underglow is off.
-          // Muted: breathe at full value so the pulse has the whole range to swing through.
-          if (id(player_muted).state) {
-            id(knob1).set_effect(${breathe_effect});
-            id(knob1).set_hsv(hue, 255, 255);
-            return;
-          }
-          // |cos(2*pi*v)| is 1 at v = 0, 0.5 and 1, and 0 at the quarter points.
-          // The sqrt flattens the dip so the blends stay bright for longer.
-          float peak = sqrtf(fabsf(cosf(6.28318531f * v)));
-          const float floor_v = ${led_min_brightness};
-          uint8_t val = (uint8_t) lroundf(floor_v + (255.0f - floor_v) * peak);
-          id(knob1).set_effect(1);
-          id(knob1).set_hsv(hue, 255, val);
 
-# Repaint periodically so the knob picks the right state back up after being
-# unplugged and reattached. Redundant updates are dropped in the component, so
-# this costs no USB traffic while nothing changes.
+          if (mode == 0) {
+            // Saturation 0 is white, so the hue does not matter.
+            id(current_val) = ${idle_brightness};
+            id(knob1).set_hsv(0, 0, ${idle_brightness});
+          } else if (mode == 1) {
+            // |cos(2*pi*v)| is 1 at v = 0, 0.5 and 1, and 0 at the quarter points.
+            // The sqrt flattens the dip so the blends stay bright for longer.
+            float peak = sqrtf(fabsf(cosf(6.28318531f * v)));
+            const float floor_v = ${led_min_brightness};
+            id(current_val) = (int) lroundf(floor_v + (255.0f - floor_v) * peak);
+            id(knob1).set_hsv(hue, 255, (uint8_t) id(current_val));
+          } else if (last_mode != 2) {
+            // Entering mute: start the breath at the brightness already showing,
+            // on the rising half of the curve, so there is no visible jump.
+            float span = ${breathe_max} - ${breathe_min};
+            float b0 = clamp((id(current_val) - ${breathe_min}) / span, 0.0f, 1.0f);
+            id(breathe_phase) = acosf(1.0f - 2.0f * b0);
+          }
+          last_mode = mode;
+
+# Breathing steps while muted. set_hsv() only sends the brightness command when
+# the hue is unchanged, so each step costs a single 32-byte report.
 interval:
+  - interval: 50ms
+    then:
+      - lambda: |-
+          if (id(player_state).state != "playing" || !id(player_muted).state)
+            return;
+          id(breathe_phase) += 6.28318531f * 0.05f / ${breathe_period};
+          if (id(breathe_phase) > 6.28318531f)
+            id(breathe_phase) -= 6.28318531f;
+          // 0.5 - 0.5*cos rises from 0 to 1 over half a cycle and back.
+          float b = 0.5f - 0.5f * cosf(id(breathe_phase));
+          float span = ${breathe_max} - ${breathe_min};
+          id(current_val) = (int) lroundf(${breathe_min} + span * b);
+          float raw = id(player_volume).state;
+          float v = clamp(isnan(raw) ? 0.0f : raw, 0.0f, 1.0f);
+          uint8_t hue = (uint8_t) lroundf(170.0f * (1.0f - v));
+          id(knob1).set_hsv(hue, 255, (uint8_t) id(current_val));
+
+  # Repaint periodically so the knob picks the right state back up after being
+  # unplugged and reattached. Redundant updates are dropped in the component, so
+  # this costs no USB traffic while nothing changes.
   - interval: 5s
     then:
       - script.execute: update_underglow

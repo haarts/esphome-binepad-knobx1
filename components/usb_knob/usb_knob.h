@@ -95,10 +95,14 @@ class UsbKnob : public usb_host::USBClient {
   uint8_t raw_interface_{1};
   uint8_t raw_endpoint_in_{0x82};
   uint8_t raw_endpoint_out_{0x03};
-  // Last values sent, so repeated identical updates cost no USB traffic.
+  // Last values sent, so repeated identical updates cost no USB traffic. Hue,
+  // saturation and brightness are tracked separately because they are separate
+  // commands: animating brightness then costs one packet, not two.
   // Reset on disconnect and when the protocol version changes the packet layout.
   int16_t last_effect_{-1};
-  int32_t last_hsv_{-1};
+  int16_t last_hue_{-1};
+  int16_t last_sat_{-1};
+  int16_t last_val_{-1};
   int16_t last_reported_effect_{-1};
   bool lighting_{true};
   bool claimed_{false};

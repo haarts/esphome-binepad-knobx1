@@ -177,7 +177,9 @@ void UsbKnob::handle_raw_report_(const uint8_t *data, size_t len) {
     // The version decides the packet layout, so anything cached was sent in the
     // other format and has to be resent.
     this->last_effect_ = -1;
-    this->last_hsv_ = -1;
+    this->last_hue_ = -1;
+    this->last_sat_ = -1;
+    this->last_val_ = -1;
     // Solid colour, otherwise an animation would immediately overwrite our hue.
     this->set_effect(RGBLIGHT_MODE_STATIC);
   }
@@ -206,8 +208,11 @@ void UsbKnob::set_effect(uint8_t effect) {
   // The firmware drops colour writes while the underglow is disabled, and
   // restores its own last colour when re-enabled. Either way our cache no
   // longer describes what the knob is showing, so force the next set_hsv().
-  if (effect == 0 || this->last_effect_ == 0)
-    this->last_hsv_ = -1;
+  if (effect == 0 || this->last_effect_ == 0) {
+    this->last_hue_ = -1;
+    this->last_sat_ = -1;
+    this->last_val_ = -1;
+  }
   ESP_LOGV(TAG, "set_effect(%u)", effect);
   this->send_rgblight_effect_(effect);
   this->last_effect_ = effect;
@@ -246,22 +251,33 @@ void UsbKnob::set_hsv(uint8_t hue, uint8_t saturation, uint8_t value) {
     ESP_LOGV(TAG, "set_hsv ignored, underglow is off");
     return;
   }
-  int32_t packed = (hue << 16) | (saturation << 8) | value;
-  if (packed == this->last_hsv_)
+  bool color_changed = hue != this->last_hue_ || saturation != this->last_sat_;
+  bool value_changed = value != this->last_val_;
+  if (!color_changed && !value_changed)
     return;
   ESP_LOGV(TAG, "set_hsv(%u, %u, %u)", hue, saturation, value);
-  this->last_hsv_ = packed;
-  // Colour first: the brightness command keeps the current hue/sat, and vice versa.
-  if (this->via_protocol_.load() >= VIA_PROTOCOL_CUSTOM_CHANNELS) {
-    const uint8_t color[] = {VIA_CUSTOM_SET_VALUE, VIA_CHANNEL_RGBLIGHT, VIA_RGBLIGHT_COLOR, hue, saturation};
-    const uint8_t bright[] = {VIA_CUSTOM_SET_VALUE, VIA_CHANNEL_RGBLIGHT, VIA_RGBLIGHT_BRIGHTNESS, value};
-    this->send_via_(color, sizeof(color));
-    this->send_via_(bright, sizeof(bright));
-  } else {
-    const uint8_t color[] = {VIA_CUSTOM_SET_VALUE, VIA_V2_RGBLIGHT_COLOR, hue, saturation};
-    const uint8_t bright[] = {VIA_CUSTOM_SET_VALUE, VIA_V2_RGBLIGHT_BRIGHTNESS, value};
-    this->send_via_(color, sizeof(color));
-    this->send_via_(bright, sizeof(bright));
+
+  bool modern = this->via_protocol_.load() >= VIA_PROTOCOL_CUSTOM_CHANNELS;
+  if (color_changed) {
+    if (modern) {
+      const uint8_t packet[] = {VIA_CUSTOM_SET_VALUE, VIA_CHANNEL_RGBLIGHT, VIA_RGBLIGHT_COLOR, hue, saturation};
+      this->send_via_(packet, sizeof(packet));
+    } else {
+      const uint8_t packet[] = {VIA_CUSTOM_SET_VALUE, VIA_V2_RGBLIGHT_COLOR, hue, saturation};
+      this->send_via_(packet, sizeof(packet));
+    }
+    this->last_hue_ = hue;
+    this->last_sat_ = saturation;
+  }
+  if (value_changed) {
+    if (modern) {
+      const uint8_t packet[] = {VIA_CUSTOM_SET_VALUE, VIA_CHANNEL_RGBLIGHT, VIA_RGBLIGHT_BRIGHTNESS, value};
+      this->send_via_(packet, sizeof(packet));
+    } else {
+      const uint8_t packet[] = {VIA_CUSTOM_SET_VALUE, VIA_V2_RGBLIGHT_BRIGHTNESS, value};
+      this->send_via_(packet, sizeof(packet));
+    }
+    this->last_val_ = value;
   }
 }
 
@@ -289,7 +305,9 @@ void UsbKnob::on_disconnected() {
   }
   this->via_protocol_.store(0);
   this->last_effect_ = -1;
-  this->last_hsv_ = -1;
+  this->last_hue_ = -1;
+  this->last_sat_ = -1;
+  this->last_val_ = -1;
   this->last_reported_effect_ = -1;
   this->raw_input_started_.store(false);
   this->input_started_.store(false);
