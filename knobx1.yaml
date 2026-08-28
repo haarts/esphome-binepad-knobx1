@@ -162,10 +162,11 @@ script:
           float v = clamp(isnan(raw) ? 0.0f : raw, 0.0f, 1.0f);
           // QMK hue: 0 = red, 85 = green, 170 = blue.
           uint8_t hue = (uint8_t) lroundf(170.0f * (1.0f - v));
+          // Effect before colour: set_hsv() is a no-op while the underglow is off.
           // Muted: breathe at full value so the pulse has the whole range to swing through.
           if (id(player_muted).state) {
-            id(knob1).set_hsv(hue, 255, 255);
             id(knob1).set_effect(${breathe_effect});
+            id(knob1).set_hsv(hue, 255, 255);
             return;
           }
           // |cos(2*pi*v)| is 1 at v = 0, 0.5 and 1, and 0 at the quarter points.
@@ -173,8 +174,8 @@ script:
           float peak = sqrtf(fabsf(cosf(6.28318531f * v)));
           const float floor_v = ${led_min_brightness};
           uint8_t val = (uint8_t) lroundf(floor_v + (255.0f - floor_v) * peak);
-          id(knob1).set_hsv(hue, 255, val);
           id(knob1).set_effect(1);
+          id(knob1).set_hsv(hue, 255, val);
 
 # Repaint periodically so the knob picks the right state back up after being
 # unplugged and reattached. Redundant updates are dropped in the component, so

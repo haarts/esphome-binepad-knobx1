@@ -186,6 +186,11 @@ void UsbKnob::set_effect(uint8_t effect) {
   }
   if (effect == this->last_effect_)
     return;
+  // The firmware drops colour writes while the underglow is disabled, and
+  // restores its own last colour when re-enabled. Either way our cache no
+  // longer describes what the knob is showing, so force the next set_hsv().
+  if (effect == 0 || this->last_effect_ == 0)
+    this->last_hsv_ = -1;
   ESP_LOGV(TAG, "set_effect(%u)", effect);
   this->send_rgblight_effect_(effect);
   this->last_effect_ = effect;
@@ -204,6 +209,12 @@ void UsbKnob::send_rgblight_effect_(uint8_t effect) {
 void UsbKnob::set_hsv(uint8_t hue, uint8_t saturation, uint8_t value) {
   if (!this->raw_claimed_) {
     ESP_LOGD(TAG, "set_hsv ignored, lighting not available");
+    return;
+  }
+  // rgblight_sethsv_noeeprom() returns early while the underglow is disabled,
+  // so sending now would be dropped by the firmware and wrongly cached here.
+  if (this->last_effect_ == 0) {
+    ESP_LOGV(TAG, "set_hsv ignored, underglow is off");
     return;
   }
   int32_t packed = (hue << 16) | (saturation << 8) | value;
