@@ -13,6 +13,8 @@ substitutions:
   # The small gap between the two keeps a borderline push from matching both.
   short_push_max: 0.55s
   long_push_time: 0.6s
+  # Dim white shown while the player is not playing. 51 is 20% of 255.
+  idle_brightness: "51"
   # rgblight breathing animation: 2 is the slowest, 5 the fastest.
   breathe_effect: "2"
   # Underglow floor, 0-255. The LEDs never go below this, so the blue/green and
@@ -162,9 +164,11 @@ script:
                      last_logged.c_str(), YESNO(id(player_muted).state),
                      id(player_volume).state);
           }
-          // Not playing (paused, idle, off, unavailable): underglow off.
+          // Not playing (paused, idle, off, unavailable): dim white.
           if (id(player_state).state != "playing") {
-            id(knob1).set_effect(0);
+            id(knob1).set_effect(1);
+            // Saturation 0 is white, so the hue does not matter.
+            id(knob1).set_hsv(0, 0, ${idle_brightness});
             return;
           }
           float raw = id(player_volume).state;
