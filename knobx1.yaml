@@ -9,6 +9,10 @@ substitutions:
   # How close together two pushes must be to count as a double push. Also the
   # delay before a single push toggles mute.
   double_push_window: 0.35s
+  # A push shorter than this is a tap; longer than long_push_time it is a hold.
+  # The small gap between the two keeps a borderline push from matching both.
+  short_push_max: 0.55s
+  long_push_time: 0.6s
   # Underglow floor, 0-255. The LEDs never go below this, so the blue/green and
   # green/red transitions dim but stay clearly lit.
   led_min_brightness: "110"
@@ -77,22 +81,30 @@ binary_sensor:
     usb_knob_id: knob1
     key: mute
     name: Mute
-    # Push once to toggle mute, twice quickly to skip to the next track. The
-    # single-push branch has to wait out the double-push window before firing,
-    # so mute lands ~${double_push_window} after the button comes back up.
+    # Push once to toggle mute, twice quickly to skip to the next track, or hold
+    # to play/pause. The single-push branch has to wait out the double-push
+    # window before firing, so mute lands ~${double_push_window} after release.
     on_multi_click:
       - timing:
-          - ON for at most 0.4s
+          - ON for at most ${short_push_max}
           - OFF for at most ${double_push_window}
-          - ON for at most 0.4s
+          - ON for at most ${short_push_max}
           - OFF for at least 0.05s
         then:
           - homeassistant.action:
               action: media_player.media_next_track
               data:
                 entity_id: media_player.louder_esp32_plus
+      # Fires while the button is still down, so the hold gets instant feedback.
       - timing:
-          - ON for at most 0.4s
+          - ON for at least ${long_push_time}
+        then:
+          - homeassistant.action:
+              action: media_player.media_play_pause
+              data:
+                entity_id: media_player.louder_esp32_plus
+      - timing:
+          - ON for at most ${short_push_max}
           - OFF for at least ${double_push_window}
         then:
           - homeassistant.action:
