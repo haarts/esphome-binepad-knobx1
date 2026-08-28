@@ -6,6 +6,9 @@
 substitutions:
   name: knob-livingroom
   friendly_name: Knob Living Room
+  # How close together two pushes must be to count as a double push. Also the
+  # delay before a single push toggles mute.
+  double_push_window: 0.35s
   # Underglow floor, 0-255. The LEDs never go below this, so the blue/green and
   # green/red transitions dim but stay clearly lit.
   led_min_brightness: "110"
@@ -74,16 +77,33 @@ binary_sensor:
     usb_knob_id: knob1
     key: mute
     name: Mute
-    on_press:
-      - homeassistant.action:
-          action: media_player.volume_mute
-          data:
-            entity_id: media_player.louder_esp32_plus
-          data_template:
-            is_volume_muted: "{{ mute }}"
-          variables:
-            # Toggle: send the opposite of what the player currently reports.
-            mute: !lambda 'return id(player_muted).state ? "false" : "true";'
+    # Push once to toggle mute, twice quickly to skip to the next track. The
+    # single-push branch has to wait out the double-push window before firing,
+    # so mute lands ~${double_push_window} after the button comes back up.
+    on_multi_click:
+      - timing:
+          - ON for at most 0.4s
+          - OFF for at most ${double_push_window}
+          - ON for at most 0.4s
+          - OFF for at least 0.05s
+        then:
+          - homeassistant.action:
+              action: media_player.media_next_track
+              data:
+                entity_id: media_player.louder_esp32_plus
+      - timing:
+          - ON for at most 0.4s
+          - OFF for at least ${double_push_window}
+        then:
+          - homeassistant.action:
+              action: media_player.volume_mute
+              data:
+                entity_id: media_player.louder_esp32_plus
+              data_template:
+                is_volume_muted: "{{ mute }}"
+              variables:
+                # Toggle: send the opposite of what the player currently reports.
+                mute: !lambda 'return id(player_muted).state ? "false" : "true";'
 
   # Mirrors the player's mute attribute back from HA so the knob can toggle it.
   - platform: homeassistant
