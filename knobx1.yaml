@@ -88,7 +88,9 @@ binary_sensor:
   - platform: usb_knob
     usb_knob_id: knob1
     key: mute
-    name: Mute
+    # Named for the physical gesture, not the action: the knob's press always
+    # sends the mute usage code, whatever we bind it to.
+    name: Push
     # Push once to play/pause, twice quickly to skip to the next track, or hold
     # to toggle mute. The single-push branch has to wait out the double-push
     # window before firing, so play/pause lands ~${double_push_window} after
