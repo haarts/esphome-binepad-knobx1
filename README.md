@@ -65,42 +65,17 @@ Facts confirmed against `esphome/components/usb_host` on `dev` (2026.8):
   AtomS3-Lite entry in ESPHome's board list; the Lite is the same ESP32-S3FN8
   module and pinout without the LCD.
 
-Verified: `esphome config` passes and `esphome compile` builds clean (ESPHome
-2026.8.1, ESP-IDF 5.5.5) with no warnings from `usb_knob`.
+## Status
 
-## Lighting
+Verified on hardware (AtomS3-Lite + KnobX1, ESPHome 2026.8.1, ESP-IDF 5.5.5):
 
-The KnobX1 has two WS2812 underglow LEDs. Per QMK's `keyboards/binepad/knobx1/keyboard.json`
-they are **`rgblight`** (not `rgb_matrix`), `led_count: 2`, driver ws2812 on pin C13.
-The four layer indicators are separate single-colour GPIO LEDs (A3-A6) and are not
-reachable this way.
+- Volume up / down / mute all report correctly, so ESP-IDF enumerates the same
+  interface 2 / endpoint 0x84 that Linux did, and the knob needs no HID
+  SET_PROTOCOL or SET_IDLE request to report on the extrakeys interface.
+- The VIA lighting commands work against Binepad's shipped VIAL firmware; the
+  underglow tracks the player volume.
 
-They are driven over the **VIAL raw HID interface** (interface 1, EP 0x03 OUT /
-0x82 IN), using VIA's lighting commands:
-
-| Command | VIA >= 11 | VIA < 11 |
-|---|---|---|
-| set colour | `07 02 04 <hue> <sat>` | `07 83 <hue> <sat>` |
-| set brightness | `07 02 01 <val>` | `07 80 <val>` |
-| set effect | `07 02 02 <effect>` | `07 81 <effect>` |
-
-On connect the component sends `01` (get protocol version), picks the layout from
-the reply, and sets effect 1 (static light) so an animation can't overwrite the hue.
-Nothing is written to the knob's EEPROM — VIA only persists on an explicit
-`id_custom_save` (`0x09`), which is never sent.
-
-`id(knob1).set_hsv(hue, sat, val)` is callable from any lambda; hue/sat/val are
-QMK's 0-255 scale (hue 0 = red, 85 = green, 170 = blue).
-
-Claiming the raw interface is best-effort: if it fails, lighting is skipped and a
-warning is logged, but volume reporting keeps working. `lighting: false` disables it.
-
-## Still to verify on hardware
-
-- That interface 2 / endpoint 0x84 is what the ESP-IDF host enumerates (the
-  numbering came from Linux). `on_connected()` logs every endpoint on the
-  claimed interface at DEBUG, so `logger: level: DEBUG` will show the truth;
-  override `interface:` / `endpoint:` in YAML if they differ.
-- Whether the knob needs a HID SET_PROTOCOL / SET_IDLE request. Neither
-  ESPHome's `usb_host` nor NonaSuomy's `usb_hidx` sends one, and interface 2 is
-  not a boot interface, so it should report by default.
+If a future firmware revision moves things around, `on_connected()` logs every
+endpoint it finds on the claimed interfaces at DEBUG, and `interface:`,
+`endpoint:`, `raw_interface:`, `raw_endpoint_in:` and `raw_endpoint_out:` are
+all overridable in YAML.
