@@ -89,9 +89,10 @@ binary_sensor:
     usb_knob_id: knob1
     key: mute
     name: Mute
-    # Push once to toggle mute, twice quickly to skip to the next track, or hold
-    # to play/pause. The single-push branch has to wait out the double-push
-    # window before firing, so mute lands ~${double_push_window} after release.
+    # Push once to play/pause, twice quickly to skip to the next track, or hold
+    # to toggle mute. The single-push branch has to wait out the double-push
+    # window before firing, so play/pause lands ~${double_push_window} after
+    # release; the hold fires immediately.
     on_multi_click:
       - timing:
           - ON for at most ${short_push_max}
@@ -108,14 +109,6 @@ binary_sensor:
           - ON for at least ${long_push_time}
         then:
           - homeassistant.action:
-              action: media_player.media_play_pause
-              data:
-                entity_id: media_player.louder_esp32_plus
-      - timing:
-          - ON for at most ${short_push_max}
-          - OFF for at least ${double_push_window}
-        then:
-          - homeassistant.action:
               action: media_player.volume_mute
               data:
                 entity_id: media_player.louder_esp32_plus
@@ -124,6 +117,14 @@ binary_sensor:
               variables:
                 # Toggle: send the opposite of what the player currently reports.
                 mute: !lambda 'return id(player_muted).state ? "false" : "true";'
+      - timing:
+          - ON for at most ${short_push_max}
+          - OFF for at least ${double_push_window}
+        then:
+          - homeassistant.action:
+              action: media_player.media_play_pause
+              data:
+                entity_id: media_player.louder_esp32_plus
 
   # Mirrors the player's mute attribute back from HA so the knob can toggle it.
   - platform: homeassistant
