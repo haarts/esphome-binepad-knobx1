@@ -1,0 +1,14 @@
+# ESPHome build output and generated sources
+.esphome/
+*.bin
+*.elf
+
+# Secrets: wifi credentials, HA tokens
+secrets.yaml
+.ha_token
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
