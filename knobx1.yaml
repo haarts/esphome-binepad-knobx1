@@ -193,5 +193,3 @@ interval:
   - interval: 5s
     then:
       - script.execute: update_underglow
-      # Diagnostic: logs the effect the knob reports, when it changes.
-      - lambda: 'id(knob1).query_effect();'

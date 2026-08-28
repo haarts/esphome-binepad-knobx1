@@ -152,7 +152,7 @@ void UsbKnob::start_raw_input_() {
 void UsbKnob::handle_raw_report_(const uint8_t *data, size_t len) {
   if (len < 1)
     return;
-  ESP_LOGD(TAG, "VIA reply: %02X %02X %02X %02X (%u bytes)", data[0], len > 1 ? data[1] : 0,
+  ESP_LOGV(TAG, "VIA reply: %02X %02X %02X %02X (%u bytes)", data[0], len > 1 ? data[1] : 0,
            len > 2 ? data[2] : 0, len > 3 ? data[3] : 0, len);
   // Reply to query_effect(). VIA >= 11 answers [ 08, channel, value_id, value ];
   // VIAL (protocol 9) answers [ 08, value_id, value ].
